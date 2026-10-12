@@ -4,6 +4,7 @@
 //! This file is declarations only — no function definitions live here
 //! (CONTRIBUTING.md).
 
+pub mod cooldown;
 pub mod error;
 pub mod json_repair;
 pub mod placeholder;

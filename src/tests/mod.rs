@@ -697,6 +697,7 @@ pub mod prompt_known_paths_test;
 pub mod provider_by_name_restore_test;
 pub mod provider_config_regression_test;
 pub mod provider_context_window_override_test;
+pub mod provider_cooldown_test;
 pub mod provider_error_proxy_test;
 pub mod provider_factory_regression_test;
 pub mod provider_picker_setup_hint_test;

@@ -7,6 +7,7 @@
 //! primary entirely until the process exits, so a single 429 doesn't
 //! cost 60s of retries on every following turn.
 
+use super::cooldown::CooldownRegistry;
 use super::error::{ProviderError, Result};
 use super::r#trait::{Provider, ProviderStream};
 use super::types::{LLMRequest, LLMResponse};
@@ -14,6 +15,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 /// Description of a swap that just occurred — consumed once by the
 /// caller (typically the agent service) so it can surface a UI alert.
@@ -37,6 +39,7 @@ pub struct FallbackProvider {
     fallbacks: Vec<Arc<dyn Provider>>,
     active: AtomicUsize,
     pending_swap: Mutex<Option<SwapEvent>>,
+    cooldowns: CooldownRegistry,
 }
 
 impl FallbackProvider {
@@ -46,7 +49,68 @@ impl FallbackProvider {
             fallbacks,
             active: AtomicUsize::new(0),
             pending_swap: Mutex::new(None),
+            cooldowns: CooldownRegistry::default(),
         }
+    }
+
+    /// The chain entry at `idx`: 0 = primary, n = `fallbacks[n - 1]`.
+    fn entry_at(&self, idx: usize) -> &dyn Provider {
+        if idx == 0 {
+            self.primary.as_ref()
+        } else {
+            self.fallbacks[idx - 1].as_ref()
+        }
+    }
+
+    /// Chain indexes to try, in order. The sticky entry and everything after
+    /// it are eligible, plus any earlier entry that has a cooldown record, so
+    /// a lapsed primary is tried again. Cooling entries move to the back: they
+    /// are used only once everything else has failed.
+    fn candidate_order(&self, start_idx: usize) -> Vec<usize> {
+        let total = 1 + self.fallbacks.len();
+        let eligible = (0..total)
+            .filter(|&i| i >= start_idx || self.cooldowns.has_record(self.entry_at(i).name()));
+        let (cool, warm): (Vec<usize>, Vec<usize>) =
+            eligible.partition(|&i| self.cooldowns.is_cooling(self.entry_at(i).name()));
+        warm.into_iter().chain(cool).collect()
+    }
+
+    /// Park an entry that answered with a declared wait until that moment.
+    /// A wait too large to represent as an `Instant` is not parked at all.
+    fn park_if_declared(&self, idx: usize, err: &ProviderError) {
+        if let Some(window) = err.declared_cooldown()
+            && let Some(until) = Instant::now().checked_add(window)
+        {
+            self.cooldowns.park(self.entry_at(idx).name(), until);
+        }
+    }
+
+    /// Label for an entry as it appears in logs and the exhausted summary.
+    fn label_at(&self, idx: usize) -> String {
+        if idx == 0 {
+            format!("primary '{}'", self.primary.name())
+        } else {
+            format!("fallback #{} '{}'", idx, self.fallbacks[idx - 1].name())
+        }
+    }
+
+    /// The `tried` entry for a failed attempt. The sticky entry keeps its
+    /// provenance label; the others are named as before.
+    fn attempt_label(&self, idx: usize, start_idx: usize) -> String {
+        if idx == start_idx {
+            self.label_at(idx)
+        } else {
+            self.entry_at(idx).name().to_string()
+        }
+    }
+
+    /// Reason recorded on a swap: the last failure, or `cooldown` when the
+    /// entry was reached only because earlier ones were parked.
+    fn reason_for(last_err: &Option<ProviderError>) -> String {
+        last_err
+            .as_ref()
+            .map(super::error::user_facing_reason)
+            .unwrap_or_else(|| "cooldown".into())
     }
 
     /// Get the currently-active provider (primary or a sticky fallback).
@@ -178,57 +242,41 @@ impl FallbackProvider {
 impl Provider for FallbackProvider {
     async fn complete(&self, request: LLMRequest) -> Result<LLMResponse> {
         let start_idx = self.active.load(Ordering::Acquire);
-        let mut last_err: Option<ProviderError>;
+        let mut last_err: Option<ProviderError> = None;
         let mut tried: Vec<String> = Vec::new();
 
-        // Try the currently-active provider first.
-        // Always remap — after a restart the sticky index resets to 0 but
-        // the request may still carry a model from a previously-active
-        // provider (e.g. "openrouter/elephant-alpha" sent to Qwen).
-        let active = self.active_provider();
-        let active_request = Self::remap_request_for_fallback(active.as_ref(), &request);
-        match active.complete(active_request).await {
-            Ok(resp) => return Ok(resp),
-            Err(e) if !Self::should_try_next(&e) => return Err(e),
-            Err(e) => {
-                tracing::warn!(
-                    "Chain entry {} failed: {} — trying next in chain",
-                    self.provenance_label(),
-                    e
-                );
-                tried.push(self.provenance_label());
-                last_err = Some(e);
+        for idx in self.candidate_order(start_idx) {
+            let entry = self.entry_at(idx);
+            // A lapsed window is spent by this attempt. If the entry declares
+            // a wait again, `park_if_declared` parks it afresh below.
+            if !self.cooldowns.is_cooling(entry.name()) {
+                self.cooldowns.forget(entry.name());
             }
-        }
-
-        // Try subsequent fallbacks (skip ones already exhausted by the
-        // sticky pointer — start_idx already accounts for them)
-        for offset in start_idx..self.fallbacks.len() {
-            let fb = &self.fallbacks[offset];
-            let fb_request = substitute_request(fb.as_ref(), &request);
-            let to_model = fb_request.model.clone();
-            match fb.complete(fb_request).await {
+            // Always remap for the sticky entry: after a restart the sticky
+            // index resets to 0 but the request may still carry a model from a
+            // previously-active provider (#1374: a swap never invents a model).
+            let req = if idx == start_idx {
+                Self::remap_request_for_fallback(entry, &request)
+            } else {
+                substitute_request(entry, &request)
+            };
+            let to_model = req.model.clone();
+            match entry.complete(req).await {
                 Ok(resp) => {
-                    self.promote(
-                        offset + 1,
-                        last_err
-                            .as_ref()
-                            .map(super::error::user_facing_reason)
-                            .unwrap_or_else(|| "unknown".into())
-                            .as_str(),
-                        &request.model,
-                        &to_model,
-                    );
+                    if idx != start_idx {
+                        self.promote(idx, &Self::reason_for(&last_err), &request.model, &to_model);
+                    }
                     return Ok(resp);
                 }
+                Err(e) if idx == start_idx && !Self::should_try_next(&e) => return Err(e),
                 Err(e) => {
                     tracing::warn!(
-                        "Chain entry fallback #{} '{}' failed: {}",
-                        offset + 1,
-                        fb.name(),
+                        "Chain entry {} failed: {} — trying next in chain",
+                        self.label_at(idx),
                         e
                     );
-                    tried.push(fb.name().to_string());
+                    self.park_if_declared(idx, &e);
+                    tried.push(self.attempt_label(idx, start_idx));
                     last_err = Some(e);
                 }
             }
@@ -239,54 +287,36 @@ impl Provider for FallbackProvider {
 
     async fn stream(&self, request: LLMRequest) -> Result<ProviderStream> {
         let start_idx = self.active.load(Ordering::Acquire);
-        let mut last_err: Option<ProviderError>;
+        let mut last_err: Option<ProviderError> = None;
         let mut tried: Vec<String> = Vec::new();
 
-        // Try the currently-active provider first.
-        // Always remap — see complete() comment.
-        let active = self.active_provider();
-        let active_request = Self::remap_request_for_fallback(active.as_ref(), &request);
-        match active.stream(active_request).await {
-            Ok(stream) => return Ok(stream),
-            Err(e) if !Self::should_try_next(&e) => return Err(e),
-            Err(e) => {
-                tracing::warn!(
-                    "Chain entry {} stream failed: {} — trying next in chain",
-                    self.provenance_label(),
-                    e
-                );
-                tried.push(self.provenance_label());
-                last_err = Some(e);
+        for idx in self.candidate_order(start_idx) {
+            let entry = self.entry_at(idx);
+            if !self.cooldowns.is_cooling(entry.name()) {
+                self.cooldowns.forget(entry.name());
             }
-        }
-
-        // Try subsequent fallbacks
-        for offset in start_idx..self.fallbacks.len() {
-            let fb = &self.fallbacks[offset];
-            let fb_request = substitute_request(fb.as_ref(), &request);
-            let to_model = fb_request.model.clone();
-            match fb.stream(fb_request).await {
+            let req = if idx == start_idx {
+                Self::remap_request_for_fallback(entry, &request)
+            } else {
+                substitute_request(entry, &request)
+            };
+            let to_model = req.model.clone();
+            match entry.stream(req).await {
                 Ok(stream) => {
-                    self.promote(
-                        offset + 1,
-                        last_err
-                            .as_ref()
-                            .map(super::error::user_facing_reason)
-                            .unwrap_or_else(|| "unknown".into())
-                            .as_str(),
-                        &request.model,
-                        &to_model,
-                    );
+                    if idx != start_idx {
+                        self.promote(idx, &Self::reason_for(&last_err), &request.model, &to_model);
+                    }
                     return Ok(stream);
                 }
+                Err(e) if idx == start_idx && !Self::should_try_next(&e) => return Err(e),
                 Err(e) => {
                     tracing::warn!(
-                        "Chain entry fallback #{} '{}' stream failed: {}",
-                        offset + 1,
-                        fb.name(),
+                        "Chain entry {} stream failed: {} — trying next in chain",
+                        self.label_at(idx),
                         e
                     );
-                    tried.push(fb.name().to_string());
+                    self.park_if_declared(idx, &e);
+                    tried.push(self.attempt_label(idx, start_idx));
                     last_err = Some(e);
                 }
             }
