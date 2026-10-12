@@ -223,7 +223,11 @@ async fn chain_returns_to_the_primary_when_its_window_lapses() {
     let chain = FallbackProvider::new(primary.clone(), vec![backup.clone()]);
 
     chain.complete(request()).await.expect("backup answers");
-    assert_eq!(chain.active_subprovider_name().as_deref(), Some("backup"));
+    assert_eq!(
+        chain.active_subprovider_name(),
+        None,
+        "a fallback that covered a parked primary is not made sticky"
+    );
 
     // Primary recovers and its one-second window lapses.
     primary.failing.store(false, Ordering::SeqCst);

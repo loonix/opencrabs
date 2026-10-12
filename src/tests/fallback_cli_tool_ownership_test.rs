@@ -28,6 +28,7 @@ struct OwnershipMock {
     handles_tools: bool,
     manages_context: bool,
     fails: bool,
+    declared_wait: Option<String>,
 }
 
 impl OwnershipMock {
@@ -38,6 +39,7 @@ impl OwnershipMock {
             handles_tools: true,
             manages_context: true,
             fails,
+            declared_wait: None,
         }
     }
 
@@ -48,6 +50,22 @@ impl OwnershipMock {
             handles_tools: false,
             manages_context: false,
             fails,
+            declared_wait: None,
+        }
+    }
+
+    /// Fail with a 429 that declares this wait instead of the plain throttle.
+    fn with_wait(mut self, msg: &str) -> Self {
+        self.declared_wait = Some(msg.to_string());
+        self
+    }
+
+    fn throttle(&self) -> ProviderError {
+        match &self.declared_wait {
+            Some(msg) => ProviderError::RateLimitExceeded(msg.clone()),
+            None => {
+                ProviderError::RateLimitExceeded(format!("{} throttled, retry shortly", self.name))
+            }
         }
     }
 }
@@ -65,10 +83,7 @@ impl Provider for OwnershipMock {
             // non-retryable, which stops `should_try_next` advancing the
             // chain at all. Ownership is what this file pins, so keep the
             // error in the plain-throttle class the chain does walk.
-            return Err(ProviderError::RateLimitExceeded(format!(
-                "{} throttled, retry shortly",
-                self.name
-            )));
+            return Err(self.throttle());
         }
         Ok(LLMResponse {
             id: format!("{}-response", self.name),
@@ -96,10 +111,7 @@ impl Provider for OwnershipMock {
             // non-retryable, which stops `should_try_next` advancing the
             // chain at all. Ownership is what this file pins, so keep the
             // error in the plain-throttle class the chain does walk.
-            return Err(ProviderError::RateLimitExceeded(format!(
-                "{} throttled, retry shortly",
-                self.name
-            )));
+            return Err(self.throttle());
         }
         Ok(Box::pin(futures::stream::empty()))
     }
@@ -218,6 +230,35 @@ async fn a_real_failover_moves_ownership_not_just_a_forced_swap() {
     assert!(
         chain.cli_handles_tools(),
         "the entry that served the call owns its tool execution"
+    );
+}
+
+#[tokio::test]
+async fn a_declared_wait_failover_to_a_cli_hands_ownership_without_sticking() {
+    // The primary parks itself for a long declared wait, so the CLI answers
+    // without becoming sticky. Ownership must still follow the CLI that
+    // answered, or its tool calls run twice (#1100).
+    let chain = FallbackProvider::new(
+        Arc::new(OwnershipMock::api("zhipu", true).with_wait("retry after 157000 s")),
+        vec![Arc::new(OwnershipMock::cli("claude-cli", false))],
+    );
+    assert!(!chain.cli_handles_tools());
+
+    let resp = chain
+        .complete(request_for("mock-default"))
+        .await
+        .expect("the CLI fallback should serve the call");
+    assert_eq!(resp.id, "claude-cli-response");
+
+    assert!(
+        chain.cli_handles_tools(),
+        "the entry that answered owns its tool execution"
+    );
+    assert!(chain.cli_manages_context());
+    assert_eq!(
+        chain.active_subprovider_name(),
+        None,
+        "a declared-wait failover must not make the CLI sticky"
     );
 }
 

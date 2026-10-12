@@ -2,10 +2,12 @@
 //!
 //! Wraps a primary provider with an ordered list of fallbacks.
 //! When a provider returns a rate-limit (or other retryable) error, the
-//! next provider in the chain is tried. After a successful fallback the
-//! chosen provider becomes **sticky** — subsequent calls skip the dead
-//! primary entirely until the process exits, so a single 429 doesn't
-//! cost 60s of retries on every following turn.
+//! next provider in the chain is tried. After a hard failure the chosen
+//! fallback becomes **sticky** — subsequent calls skip the dead primary
+//! entirely until the process exits, so a single 500 doesn't cost 60s of
+//! retries on every following turn. A 429 that declares a wait does not
+//! make the fallback sticky: the primary is parked until the window lapses
+//! and re-enters on its own (see `cooldown.rs`).
 
 use super::cooldown::CooldownRegistry;
 use super::error::{ProviderError, Result};
@@ -31,13 +33,20 @@ pub struct SwapEvent {
 /// A provider that tries a chain of providers in order on failure.
 ///
 /// `active` indexes into the chain: 0 = primary, 1..=fallbacks.len() = the
-/// (n-1)-th fallback. After a successful swap, `active` advances and stays
-/// there, except that an entry parked by a declared 429 wait is eligible
-/// again once its window lapses, and a success there moves `active` back.
+/// (n-1)-th fallback. After a hard failure `active` advances and stays there,
+/// and a success on an earlier entry moves it back. An entry that answered
+/// while the primary was parked by a declared 429 wait does not move `active`.
+///
+/// `served` is the entry that answered the most recent request. It equals
+/// `active` except in that cooldown case, and it is what the per-request
+/// questions (who executes tools, who owns context, which timeout applies)
+/// are answered from, so a non-sticky fallback that answered still owns its
+/// own tool execution (#1100).
 pub struct FallbackProvider {
     primary: Arc<dyn Provider>,
     fallbacks: Vec<Arc<dyn Provider>>,
     active: AtomicUsize,
+    served: AtomicUsize,
     pending_swap: Mutex<Option<SwapEvent>>,
     cooldowns: CooldownRegistry,
 }
@@ -48,6 +57,7 @@ impl FallbackProvider {
             primary,
             fallbacks,
             active: AtomicUsize::new(0),
+            served: AtomicUsize::new(0),
             pending_swap: Mutex::new(None),
             cooldowns: CooldownRegistry::default(),
         }
@@ -113,13 +123,36 @@ impl FallbackProvider {
             .unwrap_or_else(|| "cooldown".into())
     }
 
-    /// Get the currently-active provider (primary or a sticky fallback).
-    fn active_provider(&self) -> Arc<dyn Provider> {
-        let idx = self.active.load(Ordering::Acquire);
+    /// The entry that answered the most recent request (the sticky entry
+    /// before any request has been served).
+    fn serving_provider(&self) -> Arc<dyn Provider> {
+        let idx = self.served.load(Ordering::Acquire);
         if idx == 0 {
             self.primary.clone()
         } else {
             self.fallbacks[idx - 1].clone()
+        }
+    }
+
+    /// Record which entry answered and decide whether it becomes sticky.
+    ///
+    /// A fallback that answered only because the primary was parked by a
+    /// declared wait is not promoted: the primary re-enters on its own when
+    /// the window lapses. A hard failure keeps the original behaviour, sticky
+    /// on the entry that answered. Answering from an earlier entry always
+    /// moves `active` back, which is how a recovered primary is picked up.
+    fn settle_success(
+        &self,
+        idx: usize,
+        start_idx: usize,
+        hard_failure: bool,
+        last_err: &Option<ProviderError>,
+        requested: &str,
+        served_model: &str,
+    ) {
+        self.served.store(idx, Ordering::Release);
+        if idx < start_idx || (idx != start_idx && hard_failure) {
+            self.promote(idx, &Self::reason_for(last_err), requested, served_model);
         }
     }
 
@@ -136,6 +169,7 @@ impl FallbackProvider {
     /// footer, which reads the session's resolved pair (#918).
     fn promote(&self, new_idx: usize, reason: &str, from_model: &str, to_model: &str) {
         let old_idx = self.active.swap(new_idx, Ordering::AcqRel);
+        self.served.store(new_idx, Ordering::Release);
         if old_idx == new_idx {
             return;
         }
@@ -244,6 +278,7 @@ impl Provider for FallbackProvider {
         let start_idx = self.active.load(Ordering::Acquire);
         let mut last_err: Option<ProviderError> = None;
         let mut tried: Vec<String> = Vec::new();
+        let mut hard_failure = false;
 
         for idx in self.candidate_order(start_idx) {
             let entry = self.entry_at(idx);
@@ -258,9 +293,14 @@ impl Provider for FallbackProvider {
             let to_model = req.model.clone();
             match entry.complete(req).await {
                 Ok(resp) => {
-                    if idx != start_idx {
-                        self.promote(idx, &Self::reason_for(&last_err), &request.model, &to_model);
-                    }
+                    self.settle_success(
+                        idx,
+                        start_idx,
+                        hard_failure,
+                        &last_err,
+                        &request.model,
+                        &to_model,
+                    );
                     return Ok(resp);
                 }
                 Err(e) if idx == start_idx && !Self::should_try_next(&e) => return Err(e),
@@ -270,6 +310,7 @@ impl Provider for FallbackProvider {
                         self.label_at(idx),
                         e
                     );
+                    hard_failure |= e.declared_cooldown().is_none();
                     self.park_if_declared(idx, &e);
                     tried.push(self.attempt_label(idx, start_idx));
                     last_err = Some(e);
@@ -284,6 +325,7 @@ impl Provider for FallbackProvider {
         let start_idx = self.active.load(Ordering::Acquire);
         let mut last_err: Option<ProviderError> = None;
         let mut tried: Vec<String> = Vec::new();
+        let mut hard_failure = false;
 
         for idx in self.candidate_order(start_idx) {
             let entry = self.entry_at(idx);
@@ -295,9 +337,14 @@ impl Provider for FallbackProvider {
             let to_model = req.model.clone();
             match entry.stream(req).await {
                 Ok(stream) => {
-                    if idx != start_idx {
-                        self.promote(idx, &Self::reason_for(&last_err), &request.model, &to_model);
-                    }
+                    self.settle_success(
+                        idx,
+                        start_idx,
+                        hard_failure,
+                        &last_err,
+                        &request.model,
+                        &to_model,
+                    );
                     return Ok(stream);
                 }
                 Err(e) if idx == start_idx && !Self::should_try_next(&e) => return Err(e),
@@ -307,6 +354,7 @@ impl Provider for FallbackProvider {
                         self.label_at(idx),
                         e
                     );
+                    hard_failure |= e.declared_cooldown().is_none();
                     self.park_if_declared(idx, &e);
                     tried.push(self.attempt_label(idx, start_idx));
                     last_err = Some(e);
@@ -329,7 +377,7 @@ impl Provider for FallbackProvider {
         self.primary.supports_vision()
     }
 
-    /// Reports the **active** entry, not the primary (#1100).
+    /// Reports the entry that answered the last request, not the primary (#1100).
     ///
     /// This flag decides who executes tool calls. An agentic CLI provider
     /// runs the tools itself inside its own subprocess, so the tool loop
@@ -344,16 +392,16 @@ impl Provider for FallbackProvider {
     /// after failing over to an API provider, kept reporting `true` and no
     /// one executed the tools at all.
     fn cli_handles_tools(&self) -> bool {
-        self.active_provider().cli_handles_tools()
+        self.serving_provider().cli_handles_tools()
     }
 
-    /// Reports the **active** entry for the same reason as
+    /// Reports the entry that answered the last request, for the same reason as
     /// [`Self::cli_handles_tools`]: whoever owns the conversation history
     /// owns compaction. Compacting on OpenCrabs' side for a CLI that
     /// persists its own session (or skipping compaction for an API provider
     /// that does not) both corrupt the turn.
     fn cli_manages_context(&self) -> bool {
-        self.active_provider().cli_manages_context()
+        self.serving_provider().cli_manages_context()
     }
 
     fn name(&self) -> &str {
@@ -395,18 +443,18 @@ impl Provider for FallbackProvider {
     }
 
     fn request_timeout(&self) -> Option<std::time::Duration> {
-        self.active_provider().request_timeout()
+        self.serving_provider().request_timeout()
     }
 
     fn stream_idle_timeout(&self) -> Option<std::time::Duration> {
-        self.active_provider().stream_idle_timeout()
+        self.serving_provider().stream_idle_timeout()
     }
 
     fn thinking_loop_timeout(&self) -> Option<u64> {
-        // Follows the ACTIVE provider, not the primary: the guard clocks the
+        // Follows the entry that answered last, not the primary: the guard clocks the
         // stream that is actually running, and a fallback that is phantom-prone
         // needs its own ceiling (#1690).
-        self.active_provider().thinking_loop_timeout()
+        self.serving_provider().thinking_loop_timeout()
     }
 
     fn calculate_cost(&self, model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
