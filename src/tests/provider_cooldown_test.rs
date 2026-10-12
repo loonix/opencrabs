@@ -12,6 +12,7 @@ use crate::brain::provider::{
 use crate::utils::retry::RetryableError;
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -20,7 +21,7 @@ use std::time::{Duration, Instant};
 struct CoolMock {
     name: String,
     failing: AtomicBool,
-    wait_msg: String,
+    wait_msg: Mutex<String>,
     calls: AtomicUsize,
 }
 
@@ -29,15 +30,21 @@ impl CoolMock {
         Arc::new(Self {
             name: name.to_string(),
             failing: AtomicBool::new(failing),
-            wait_msg: wait_msg.to_string(),
+            wait_msg: Mutex::new(wait_msg.to_string()),
             calls: AtomicUsize::new(0),
         })
+    }
+
+    fn set_wait_msg(&self, msg: &str) {
+        *self.wait_msg.lock().unwrap() = msg.to_string();
     }
 
     fn fail_now(&self) -> Option<ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.failing.load(Ordering::SeqCst) {
-            Some(ProviderError::RateLimitExceeded(self.wait_msg.clone()))
+            Some(ProviderError::RateLimitExceeded(
+                self.wait_msg.lock().unwrap().clone(),
+            ))
         } else {
             None
         }
@@ -232,6 +239,32 @@ async fn chain_returns_to_the_primary_when_its_window_lapses() {
         None,
         "the session is back on the primary"
     );
+}
+
+#[tokio::test]
+async fn a_lapsed_primary_that_fails_without_a_wait_is_tried_again_later() {
+    // Regression: the attempt used to drop a lapsed record before calling the
+    // provider, so one undeclared failure removed the primary from the chain.
+    let primary = CoolMock::new("primary", "retry after 1 s", true);
+    let backup = CoolMock::new("backup", "", false);
+    let chain = FallbackProvider::new(primary.clone(), vec![backup.clone()]);
+
+    chain.complete(request()).await.expect("backup answers");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    // The window has lapsed. The primary is tried once and fails with no wait.
+    primary.set_wait_msg("rate limited");
+    chain.complete(request()).await.expect("backup answers");
+    assert_eq!(primary.calls(), 2, "the lapsed primary is tried once");
+
+    // The session stays on the backup, but the primary must still be eligible.
+    chain.complete(request()).await.expect("backup answers");
+    assert_eq!(
+        primary.calls(),
+        3,
+        "an undeclared failure must not drop the primary from the chain"
+    );
+    assert_eq!(chain.active_subprovider_name().as_deref(), Some("backup"));
 }
 
 #[tokio::test]
