@@ -32,8 +32,8 @@ pub struct SwapEvent {
 ///
 /// `active` indexes into the chain: 0 = primary, 1..=fallbacks.len() = the
 /// (n-1)-th fallback. After a successful swap, `active` advances and stays
-/// there for the rest of the process — there is no automatic recovery
-/// back to the original primary.
+/// there, except that an entry parked by a declared 429 wait is eligible
+/// again once its window lapses, and a success there moves `active` back.
 pub struct FallbackProvider {
     primary: Arc<dyn Provider>,
     fallbacks: Vec<Arc<dyn Provider>>,
@@ -247,11 +247,6 @@ impl Provider for FallbackProvider {
 
         for idx in self.candidate_order(start_idx) {
             let entry = self.entry_at(idx);
-            // A lapsed window is spent by this attempt. If the entry declares
-            // a wait again, `park_if_declared` parks it afresh below.
-            if !self.cooldowns.is_cooling(entry.name()) {
-                self.cooldowns.forget(entry.name());
-            }
             // Always remap for the sticky entry: after a restart the sticky
             // index resets to 0 but the request may still carry a model from a
             // previously-active provider (#1374: a swap never invents a model).
@@ -292,9 +287,6 @@ impl Provider for FallbackProvider {
 
         for idx in self.candidate_order(start_idx) {
             let entry = self.entry_at(idx);
-            if !self.cooldowns.is_cooling(entry.name()) {
-                self.cooldowns.forget(entry.name());
-            }
             let req = if idx == start_idx {
                 Self::remap_request_for_fallback(entry, &request)
             } else {

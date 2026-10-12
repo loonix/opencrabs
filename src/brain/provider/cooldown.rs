@@ -32,16 +32,11 @@ impl CooldownRegistry {
             .is_some_and(|until| *until > Instant::now())
     }
 
-    /// True when a window was ever recorded and not yet forgotten, cooling or
-    /// lapsed. A lapsed record is what lets the chain try the provider again.
+    /// True when a window was ever recorded, cooling or lapsed. A lapsed record
+    /// is what lets the chain try the provider again. Records are never
+    /// removed: there is one per provider name, so the map stays bounded.
     pub fn has_record(&self, provider: &str) -> bool {
         let map = self.until.lock().unwrap_or_else(|p| p.into_inner());
         map.contains_key(provider)
-    }
-
-    /// Drop the record for `provider`.
-    pub fn forget(&self, provider: &str) {
-        let mut map = self.until.lock().unwrap_or_else(|p| p.into_inner());
-        map.remove(provider);
     }
 }

@@ -172,7 +172,7 @@ fn declared_wait_at_the_ceiling_is_still_retried_in_place() {
 }
 
 #[test]
-fn registry_only_extends_and_forgets() {
+fn registry_only_extends() {
     let reg = CooldownRegistry::default();
     let now = Instant::now();
     reg.park("p", now + Duration::from_secs(100));
@@ -182,13 +182,10 @@ fn registry_only_extends_and_forgets() {
         "a shorter later park must not shorten the window"
     );
     assert!(reg.has_record("p"));
-    reg.forget("p");
-    assert!(!reg.is_cooling("p"));
-    assert!(!reg.has_record("p"));
 }
 
 #[test]
-fn registry_window_lapses_but_record_stays_until_forgotten() {
+fn registry_window_lapses_but_record_stays() {
     let reg = CooldownRegistry::default();
     reg.park("p", Instant::now() + Duration::from_millis(5));
     std::thread::sleep(Duration::from_millis(20));
