@@ -202,8 +202,10 @@ tiktoken-rs = "0.9.1"
 flate2 = "1"
 tar = "0.4"
 
-# Memory Search (FTS5 + vector search — store owned in src/memory, #1028)
-llama-cpp-2 = "0.1.137"
+# Memory Search (FTS5 + vector search — store owned in src/memory, #1028).
+# Declared per-target further down: on Windows the `openmp` default feature is
+# turned off, because on MSVC it resolves to vcomp.lib and therefore to
+# VCOMP140.dll, which no clean Windows install has (#2257).
 emojis = "0.8.0"
 url = "2.5.8"
 unicode-normalization = "0.1.25"
@@ -242,6 +244,19 @@ reqwest_teloxide = { package = "reqwest", version = "0.12", default-features = f
 # affected by RUSTSEC-2026-0194 and -0195 (7.5, DoS on malicious XML) with no
 # fixed release reachable from pprof 0.15. Removed rather than pinned: a
 # vulnerable transitive dep for a feature that was never wired up is pure cost.
+
+# Memory search's native half, declared per target so Windows can drop OpenMP
+# (#2257: VCOMP140.dll is not part of Windows, and `static-openmp` only does
+# anything for *-gnu targets — llama-cpp-sys-2/build.rs gates it on
+# `target_triple.contains("gnu")`, which never matches msvc).
+[target.'cfg(windows)'.dependencies]
+llama-cpp-2 = { version = "0.1.137", default-features = false, features = [
+    "common",
+    "android-shared-stdcxx",
+] }
+
+[target.'cfg(not(windows))'.dependencies]
+llama-cpp-2 = "0.1.137"
 
 # macOS: Metal GPU acceleration for local STT (rwhisper/candle)
 [target.'cfg(target_os = "macos")'.dependencies]
