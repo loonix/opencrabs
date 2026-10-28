@@ -272,7 +272,10 @@ jobs:
           # carrier belongs to #1821 and does not exist on this tree yet, so
           # listing it would be a promise this repo cannot keep. Add it in
           # the PR that adds the file.
-          pattern='^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|\.github/workflows/ci\.yml|src/utils/(shell|cwd)\.rs|src/brain/tools/(bash|read)\.rs|src/tui/app/input\.rs|src/config/(winlock|profile)\.rs)$'
+          # The two scripts own the Windows-only checks added for #2257. If
+          # either changes and this lane does not fire, the check is edited
+          # without ever running, so they belong in the pattern too.
+          pattern='^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|\.github/workflows/ci\.yml|scripts/(check-pe-imports\.py|stage-windows-runtime\.sh)|src/utils/(shell|cwd)\.rs|src/brain/tools/(bash|read)\.rs|src/tui/app/input\.rs|src/config/(winlock|profile)\.rs)$'
           if echo "$files" | grep -qE "$pattern"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
