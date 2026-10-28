@@ -128,7 +128,9 @@ fn the_settle_hook_announces_after_the_trailing_task_and_before_archive() {
     let trailing = TOOL_LOOP
         .find("complete_trailing_delivery_task()")
         .expect("the trailing delivery task auto-complete");
-    let archive = TOOL_LOOP[announce..]
+    let archive = TOOL_LOOP
+        .get(announce..)
+        .expect("a str::find offset always sits on a char boundary")
         .find("archive_plan(session_id)")
         .map(|i| i + announce)
         .expect("the archive call below the announce");
@@ -149,7 +151,13 @@ fn the_hook_uses_the_merged_callback_so_channel_turns_see_the_event() {
     let announce = TOOL_LOOP
         .find(MARKER)
         .expect("the settle hook emits PlanCompleted");
-    let block = &TOOL_LOOP[announce.saturating_sub(600)..announce];
+    // `saturating_sub` can land inside a multi-byte character, and this
+    // source carries non-ASCII in its comments, so snap the window start
+    // down to a boundary before taking the slice.
+    let window_start = TOOL_LOOP.floor_char_boundary(announce.saturating_sub(600));
+    let block = TOOL_LOOP
+        .get(window_start..announce)
+        .expect("both ends of the window sit on char boundaries");
     assert!(
         block.contains("progress_callback.as_ref()"),
         "the emit must go through the merged per-turn callback"
