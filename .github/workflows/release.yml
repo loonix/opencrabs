@@ -343,13 +343,6 @@ jobs:
           CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-march=armv8-a+crypto' || '' }}
           CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-march=armv8-a+crypto' || '' }}
           AWS_LC_SYS_CMAKE_BUILDER: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-          # Static MSVC runtime on Windows (#2257). Both halves are needed:
-          # `+crt-static` flips every Rust and cc object, LLAMA_STATIC_CRT=1
-          # is the only knob llama-cpp-sys-2 honours for its own cmake build
-          # (it reads that env var, never target-feature). Ship one without
-          # the other and the link dies with LNK2038 mismatch 'RuntimeLibrary'.
-          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static' || '' }}
-          LLAMA_STATIC_CRT: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '1' || '' }}
           # Explicit `fat` everywhere else: it is the Cargo.toml value, and an
           # empty string here would be parsed as an invalid lto setting.
           CARGO_PROFILE_RELEASE_LTO: ${{ matrix.release_lto || 'fat' }}
@@ -461,13 +454,32 @@ jobs:
             --version "${{ steps.version.outputs.version }}" \
             --out dist
 
+      # App-local deployment instead of a static CRT (#2257). `+crt-static`
+      # cannot work here: llama.cpp's CMakeLists ignores
+      # CMAKE_MSVC_RUNTIME_LIBRARY, so its objects stay /MD while Rust goes
+      # /MT and the link dies with 16 unresolved `__imp_*` externals (proven
+      # on PR #2258 run 40771770458). rtk.exe is a third-party prebuilt that
+      # imports VCRUNTIME140.dll and can never be rebuilt with our flags. Four
+      # DLLs beside both exes fix all of it, and Microsoft licenses exactly
+      # this for the VC runtime.
+      - name: Stage the MSVC runtime (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          ./scripts/stage-windows-runtime.sh --self-test
+          ./scripts/stage-windows-runtime.sh "target/${{ matrix.target }}/release"
+
       - name: Create archive
         shell: bash
         run: |
           ASSET_NAME="opencrabs-v${{ steps.version.outputs.version }}-${{ matrix.asset_suffix }}"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cd target/${{ matrix.target }}/release
-            7z a ../../../${ASSET_NAME}.zip ${{ matrix.artifact_name }} rtk.exe
+            # The staged runtime rides next to both exes. The loader checks the
+            # exe's own directory first, so this is what makes the archive
+            # start on a Windows that never installed Visual Studio.
+            7z a ../../../${ASSET_NAME}.zip ${{ matrix.artifact_name }} rtk.exe \
+              msvcp140.dll vcruntime140.dll vcruntime140_1.dll vcomp140.dll
           elif [[ "${{ matrix.asset_suffix }}" == macos-* ]]; then
             tar czf "${ASSET_NAME}.tar.gz" -C dist OpenCrabs.app
           else
@@ -503,10 +515,13 @@ jobs:
       # Windows without the vc_redist, which is most of them. Nothing in this
       # job could see it: the runner has that redist pre-installed, so the
       # binary started there and nowhere else. The import table is the signal.
-      # Blocking on purpose, rtk.exe included: rtk is a third-party prebuilt
-      # and it needs the runtime today, so this also blocks the next release
-      # until that is solved. A blocked release is cheaper than a broken one.
-      - name: Check the Windows archive needs no MSVC runtime
+      #
+      # Closure, not abstinence: the runtime is deployed app-local, so an
+      # import passes when the DLL that satisfies it travels in the archive.
+      # What fails is an import with no DLL beside it, which is the 0.5.15 bug
+      # exactly. rtk.exe is scanned too, because a third-party prebuilt is the
+      # most likely place for a surprise dependency.
+      - name: Check the Windows archive carries every DLL it imports
         if: runner.os == 'Windows'
         shell: bash
         run: |

@@ -342,16 +342,6 @@ jobs:
         shell: bash
         env:
           AWS_LC_SYS_CMAKE_BUILDER: '1'
-          # Static MSVC runtime (#2257). The shipped 0.5.15 exe imported
-          # VCRUNTIME140.dll, VCRUNTIME140_1.dll, MSVCP140.dll and
-          # VCOMP140.DLL, none of which exist on a clean Windows install.
-          # Both halves are required and neither is redundant: `+crt-static`
-          # flips the Rust and cc objects, while LLAMA_STATIC_CRT=1 is what
-          # makes the llama-cpp cmake build agree (its build.rs reads that
-          # env var, it does not read target-feature). Without the second,
-          # cmake stays on /MD and the link dies with LNK2038.
-          RUSTFLAGS: '-C target-feature=+crt-static'
-          LLAMA_STATIC_CRT: '1'
         # NOTE: local DEBUG-profile Windows builds hit LNK2038: esaxx-rs
         # 0.1.10's default `cpp` feature compiles /MT (build.rs
         # .static_crt(true)) while cmake-rs injects "-MD" into
@@ -368,12 +358,24 @@ jobs:
         # doesn't pull the esaxx object — the shape that ships releases.
         run: cargo build --locked --profile ci --target x86_64-pc-windows-msvc --all-features
 
+      # The runtime ships beside the exe, app-local (#2257). The release job
+      # does the same thing into its own output directory; doing it here too
+      # means the gate below judges the same layout users get, and the smoke
+      # step runs the binary the way the zip will.
+      - name: "Stage (windows): MSVC runtime beside the build"
+        shell: bash
+        run: |
+          ./scripts/stage-windows-runtime.sh --self-test
+          ./scripts/stage-windows-runtime.sh target/x86_64-pc-windows-msvc/ci
+
       # The gate the smoke step below cannot be (#2257). `windows-latest`
       # ships the vc_redist 14.x pre-installed, so `opencrabs.exe --version`
       # succeeds on the runner for a binary that dies instantly on a user's
       # machine, which is exactly how 0.5.15 shipped. This reads the import
-      # table of the artifact instead of trusting the runner's disk.
-      - name: "Imports (windows): no MSVC runtime DLL may be required"
+      # table of the artifact instead of trusting the runner's disk, and it
+      # asks for closure: every import is either part of Windows or sitting
+      # next to the exe that asks for it.
+      - name: "Imports (windows): every imported DLL is Windows or shipped here"
         shell: bash
         run: |
           python scripts/check-pe-imports.py --self-test

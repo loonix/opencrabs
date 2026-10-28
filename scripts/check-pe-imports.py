@@ -17,11 +17,19 @@ dumpbin, no wine, no Windows runner.
 
 Rules
   crt           VCRUNTIME140*.dll, MSVCP140*.dll, VCOMP140.dll, CONCRT140.dll.
-                Never present on a stock Windows; always a build defect.
+                Never present on a stock Windows, so it must either be linked
+                statically or travel next to the exe.
   system        Any other import must be in SYSTEM_DLLS (or api-ms-win-* /
-                ext-ms-win-*), i.e. shipped with Windows itself. Anything else
-                is reported as unknown: a third-party DLL would have to be
-                vendored next to the exe, which this project does not do.
+                ext-ms-win-*), i.e. shipped with Windows itself.
+  shipped       Anything else is a failure UNLESS the archive carries that DLL
+                beside the exe. App-local deployment is what Microsoft supports
+                for these files, and it is the only answer for a third-party
+                prebuilt like rtk.exe, which imports VCRUNTIME140.dll and can
+                never be rebuilt here. The gate therefore checks CLOSURE: every
+                DLL a binary asks for is either part of Windows or in the zip.
+                A bare .exe is judged against the DLLs in its own directory.
+                The DLL must also parse as a PE image: a zero-byte or truncated
+                file satisfies the name and still fails the loader.
 
 Usage
   scripts/check-pe-imports.py dist/*.exe
@@ -200,9 +208,20 @@ def classify(dll: str) -> str:
     return "unknown"
 
 
-def check_binary(label: str, data: bytes) -> list[str]:
-    """Print a report per binary; return the human-readable failures."""
+def check_binary(
+    label: str, data: bytes, shipped: frozenset[str] = frozenset(), report: bool = True
+) -> list[str]:
+    """Print a report per binary; return the human-readable failures.
+
+    `shipped` holds the DLL names that travel next to this exe, lowercased. A
+    non-system import fails only when nothing ships it: the question this gate
+    answers is "will the loader find every dependency", not "is the CRT
+    dynamic". rtk.exe is a prebuilt third party binary that needs
+    VCRUNTIME140.dll, so a static CRT in our own exe could never have answered
+    it, and closure is the only policy that covers both.
+    """
     failures: list[str] = []
+    shipped = frozenset(name.lower() for name in shipped)
     try:
         dlls = imported_dlls(data)
     except PEError as exc:
@@ -211,32 +230,84 @@ def check_binary(label: str, data: bytes) -> list[str]:
     if not dlls:
         failures.append(f"{label}: no import table (statically linked? check the build)")
         return failures
-    print(f"\n{label}")
+    if report:
+        print(f"\n{label}")
     for dll in dlls:
         kind = classify(dll)
-        if kind == "crt":
-            print(f"  {dll:<40} FAIL  MSVC runtime, absent on a clean Windows")
+        if kind == "system":
+            if report:
+                print(f"  {dll:<40} ok")
+        elif dll.lower() in shipped:
+            if report:
+                print(f"  {dll:<40} ok (ships next to the exe)")
+        elif kind == "crt":
+            if report:
+                print(f"  {dll:<40} FAIL  MSVC runtime, shipped nowhere")
             failures.append(
-                f"{label}: imports {dll}; build with "
-                "RUSTFLAGS='-C target-feature=+crt-static' and LLAMA_STATIC_CRT=1"
+                f"{label}: imports {dll}, which a clean Windows does not have and "
+                "the archive does not ship beside the exe"
             )
-        elif kind == "unknown":
-            print(f"  {dll:<40} FAIL  not a Windows system DLL")
-            failures.append(f"{label}: imports {dll}, which is not part of Windows")
         else:
-            print(f"  {dll:<40} ok")
+            if report:
+                print(f"  {dll:<40} FAIL  not a Windows system DLL")
+            failures.append(
+                f"{label}: imports {dll}, which is neither part of Windows nor "
+                "shipped beside the exe"
+            )
     return failures
+
+
+def is_pe_image(data: bytes) -> bool:
+    """True when `data` is a PE image the Windows loader could map.
+
+    Closure by file name alone is not closure: a zero-byte or truncated
+    vcruntime140.dll in the archive satisfies the name match and the exe still
+    dies with "is not a valid Win32 application". The check is deliberately
+    shallow (MZ, e_lfanew, PE signature) because anything deeper is a job for
+    a real loader.
+    """
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        return False
+    offset = struct.unpack_from("<I", data, 0x3C)[0]
+    if offset < 4 or offset + 4 > len(data):
+        return False
+    return data[offset : offset + 4] == b"PE\0\0"
+
+
+def _dlls_by_dir(names: list[str]) -> dict[str, frozenset[str]]:
+    """Map every directory in an archive to the DLL names it carries (lowercased)."""
+    by_dir: dict[str, set[str]] = {}
+    for name in names:
+        if not name.lower().endswith(".dll"):
+            continue
+        directory, _, base = name.rpartition("/")
+        by_dir.setdefault(directory, set()).add(base.lower())
+    return {directory: frozenset(bases) for directory, bases in by_dir.items()}
 
 
 def check_zip(path: Path) -> list[str]:
     failures: list[str] = []
     found = False
     with zipfile.ZipFile(path) as archive:
-        for name in sorted(archive.namelist()):
+        names = archive.namelist()
+        shipped_by_dir = _dlls_by_dir(names)
+        for name in sorted(names):
+            if not name.lower().endswith(".dll"):
+                continue
+            if not is_pe_image(archive.read(name)):
+                failures.append(
+                    f"{path.name}:{name}: carried as a DLL but is not a PE image"
+                )
+        for name in sorted(names):
             if not name.lower().endswith(".exe"):
                 continue
             found = True
-            failures += check_binary(f"{path.name}:{name}", archive.read(name))
+            directory, _, _ = name.rpartition("/")
+            failures += check_binary(
+                f"{path.name}:{name}",
+                archive.read(name),
+                shipped_by_dir.get(directory, frozenset()),
+            )
     if not found:
         failures.append(f"{path}: no .exe inside, nothing was checked")
     return failures
@@ -245,7 +316,13 @@ def check_zip(path: Path) -> list[str]:
 def check_path(path: Path) -> list[str]:
     if path.suffix.lower() == ".zip":
         return check_zip(path)
-    return check_binary(path.name, path.read_bytes())
+    failures = []
+    siblings = frozenset()
+    for sibling in path.parent.glob("*.dll"):
+        if not is_pe_image(sibling.read_bytes()):
+            failures.append(f"{sibling.name}: carried as a DLL but is not a PE image")
+        siblings |= {sibling.name.lower()}
+    return failures + check_binary(path.name, path.read_bytes(), siblings)
 
 
 def build_minimal_pe(dll_name: str) -> bytes:
@@ -284,6 +361,32 @@ def self_test() -> list[str]:
         problems.append("self-test: VCOMP140.DLL (uppercase) was not classified as crt")
     if classify("SOMETHINGELSE.dll") != "unknown":
         problems.append("self-test: an unknown DLL passed the allowlist")
+    # Closure is the policy now, so both halves of it get pinned here: the same
+    # CRT import must fail with nothing shipped and pass once the DLL travels
+    # beside the exe. Without this pair the gate could regress to "always fail"
+    # (which blocks every release) or "never fail" (which ships 0.5.15 again)
+    # and the self-test would still look green.
+    crt_pe = build_minimal_pe("VCRUNTIME140.dll")
+    if not check_binary("unshipped-crt", crt_pe, frozenset(), report=False):
+        problems.append("self-test: a CRT import with nothing shipped passed")
+    if check_binary("shipped-crt", crt_pe, frozenset({"vcruntime140.dll"}), report=False):
+        problems.append("self-test: a CRT import that ships beside the exe was reported")
+    if check_binary("shipped-crt-upper", crt_pe, frozenset({"VCRUNTIME140.DLL"}), report=False):
+        problems.append("self-test: shipped DLL matching is case sensitive")
+    unknown_pe = build_minimal_pe("SOMETHINGELSE.dll")
+    if not check_binary("unshipped-unknown", unknown_pe, frozenset(), report=False):
+        problems.append("self-test: an unknown import with nothing shipped passed")
+    if check_binary("shipped-unknown", unknown_pe, frozenset({"somethingelse.dll"}), report=False):
+        problems.append("self-test: a shipped unknown import was still reported")
+    if check_binary("system-only", build_minimal_pe("KERNEL32.dll"), frozenset(), report=False):
+        problems.append("self-test: a system-only binary was reported")
+    # A name is not a DLL: the same archive that satisfies closure must also
+    # carry a real image, or the loader rejects the file the gate blessed.
+    if not is_pe_image(build_minimal_pe("vcruntime140.dll")):
+        problems.append("self-test: a synthetic PE was not recognised as one")
+    for junk in (b"", b"MZ", b"MZ" + b"\0" * 100):
+        if is_pe_image(junk):
+            problems.append(f"self-test: {junk[:8]!r} was accepted as a PE image")
     return problems
 
 
@@ -318,7 +421,7 @@ def main(argv: list[str]) -> int:
             print(f"  - {failure}")
         return 1
     if args.paths:
-        print("\nok: every import is a Windows system DLL")
+        print("\nok: every import is a Windows system DLL or ships beside the exe")
     return 0
 
 
