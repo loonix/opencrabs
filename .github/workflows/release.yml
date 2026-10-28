@@ -458,7 +458,7 @@ jobs:
       # cannot work here: llama.cpp's CMakeLists ignores
       # CMAKE_MSVC_RUNTIME_LIBRARY, so its objects stay /MD while Rust goes
       # /MT and the link dies with 16 unresolved `__imp_*` externals (proven
-      # on PR #2258 run 40771770458). rtk.exe is a third-party prebuilt that
+      # on PR #2258 run 40721417449). rtk.exe is a third-party prebuilt that
       # imports VCRUNTIME140.dll and can never be rebuilt with our flags. Four
       # DLLs beside both exes fix all of it, and Microsoft licenses exactly
       # this for the VC runtime.

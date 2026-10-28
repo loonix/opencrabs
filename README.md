@@ -2132,6 +2132,8 @@ The Windows script installs `opencrabs.exe` and `rtk.exe` into `%LOCALAPPDATA%\O
 & ([scriptblock]::Create((iwr -useb https://opencrabs.com/install.ps1))) -NoPathUpdate
 ```
 
+> **The Windows zip carries its own MSVC runtime.** `msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll` and `vcomp140.dll` sit next to `opencrabs.exe` and `rtk.exe`, because Windows loads them from the folder the exe lives in. That is the whole reason the archive starts on a machine that never installed Visual Studio or the vc_redist. If you unpack by hand, keep all four DLLs beside the exes: an exe copied out on its own fails with `VCRUNTIME140_1.dll was not found`, which is what v0.5.15 did to everyone (#2257). The PowerShell one-liner above copies only the two exes out of the archive today, so on that path download the zip and unpack it yourself until #2260 lands.
+
 ```bash
 # Linux (x86_64) — binary plus a desktop entry and icon
 curl -sL "$(curl -s https://api.github.com/repos/opencrabs/opencrabs/releases/latest | sed -n 's/.*"\(https:\/\/[^"]*linux-amd64\.tar\.gz\)".*/\1/p')" | tar xz && chmod +x opencrabs && sudo mkdir -p /usr/local/bin && sudo mv opencrabs rtk /usr/local/bin/ && install -Dm644 opencrabs.desktop ~/.local/share/applications/opencrabs.desktop && install -Dm644 opencrabs.png ~/.local/share/icons/hicolor/256x256/apps/opencrabs.png && command -v opencrabs
@@ -2163,7 +2165,7 @@ Then just type `opencrabs` to start. The onboarding wizard handles everything on
 > # Arch
 > sudo pacman -S gcc-libs alsa-lib
 > ```
-> `libgomp1` is required for the binary to start at all: it is a hard link-time dependency of the local embedding engine (`llama-cpp-2`), and without it every command fails with `error while loading shared libraries: libgomp.so.1`. `libasound2` only enables local speech-to-text audio I/O and is loaded at runtime, so the binary starts without it. On Ubuntu 24.04 and newer the audio package is `libasound2t64`: `libasound2` is a virtual package there, so `apt-get install libasound2` aborts the whole command and installs nothing, not even `libgomp1`. macOS and Windows binaries have no extra prerequisites.
+> `libgomp1` is required for the binary to start at all: it is a hard link-time dependency of the local embedding engine (`llama-cpp-2`), and without it every command fails with `error while loading shared libraries: libgomp.so.1`. `libasound2` only enables local speech-to-text audio I/O and is loaded at runtime, so the binary starts without it. On Ubuntu 24.04 and newer the audio package is `libasound2t64`: `libasound2` is a virtual package there, so `apt-get install libasound2` aborts the whole command and installs nothing, not even `libgomp1`. macOS binaries have no extra prerequisites. The Windows zip carries its four MSVC runtime DLLs beside the exes, so it needs no vc_redist install either, provided you keep the archive layout.
 >
 > **Local TTS (Piper) additionally requires Python 3 with the `venv` module:**
 > ```bash
