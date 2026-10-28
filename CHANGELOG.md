@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔧 Fixes
+
+- **The Windows exe starts on a clean Windows install**: v0.5.15's `opencrabs.exe` imported `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `MSVCP140.dll` and `VCOMP140.DLL`, none of which ship with Windows, so it died before printing a line and told the user to reinstall a program that was never the problem. The release now builds with `-C target-feature=+crt-static` and `LLAMA_STATIC_CRT=1` (both halves: the second is the only knob `llama-cpp-sys-2` reads, and without it cmake stays on `/MD` and the link dies with `LNK2038`), and `llama-cpp-2` loses its default `openmp` feature on Windows, because on MSVC that always resolves to `vcomp.lib` and `static-openmp` only applies to `*-gnu` targets (#2257)
+- **`scripts/check-pe-imports.py` gates the artifact's import table**: a smoke run on `windows-latest` can never catch this, since that runner installs the vc_redist, which is exactly why the broken binary looked healthy. CI now reads the PE imports of the exe it built, and the release job reads the archive about to be uploaded, failing on any non-Windows DLL with `--self-test` proving the parser first (#2257)
+
 ## [0.5.15] - 2026-10-27
 
 16 commits since v0.5.14. 41 files changed, +2,821 / -572 lines.

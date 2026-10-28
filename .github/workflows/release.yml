@@ -343,6 +343,13 @@ jobs:
           CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-march=armv8-a+crypto' || '' }}
           CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-march=armv8-a+crypto' || '' }}
           AWS_LC_SYS_CMAKE_BUILDER: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+          # Static MSVC runtime on Windows (#2257). Both halves are needed:
+          # `+crt-static` flips every Rust and cc object, LLAMA_STATIC_CRT=1
+          # is the only knob llama-cpp-sys-2 honours for its own cmake build
+          # (it reads that env var, never target-feature). Ship one without
+          # the other and the link dies with LNK2038 mismatch 'RuntimeLibrary'.
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static' || '' }}
+          LLAMA_STATIC_CRT: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '1' || '' }}
           # Explicit `fat` everywhere else: it is the Cargo.toml value, and an
           # empty string here would be parsed as an invalid lto setting.
           CARGO_PROFILE_RELEASE_LTO: ${{ matrix.release_lto || 'fat' }}
@@ -489,6 +496,23 @@ jobs:
         run: |
           archive="opencrabs-v${{ steps.version.outputs.version }}-${{ matrix.asset_suffix }}.tar.gz"
           ./scripts/check-linux-asset-starts.sh "$archive" "$GLIBC_FLOOR"
+
+      # Same lesson as the Linux step above, opposite direction (#2257): the
+      # v0.5.15 Windows exe imported VCRUNTIME140.dll, VCRUNTIME140_1.dll,
+      # MSVCP140.dll and VCOMP140.DLL, so it died before printing a line on any
+      # Windows without the vc_redist, which is most of them. Nothing in this
+      # job could see it: the runner has that redist pre-installed, so the
+      # binary started there and nowhere else. The import table is the signal.
+      # Blocking on purpose, rtk.exe included: rtk is a third-party prebuilt
+      # and it needs the runtime today, so this also blocks the next release
+      # until that is solved. A blocked release is cheaper than a broken one.
+      - name: Check the Windows archive needs no MSVC runtime
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          archive="opencrabs-v${{ steps.version.outputs.version }}-${{ matrix.asset_suffix }}.zip"
+          python scripts/check-pe-imports.py --self-test
+          python scripts/check-pe-imports.py "$archive"
 
       - name: Upload artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
