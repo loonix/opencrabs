@@ -2,6 +2,7 @@
 
 pub mod approval;
 pub mod command_label;
+pub mod completion_sound;
 pub(crate) mod config_reload_reason;
 pub mod config_watcher;
 pub mod cwd;

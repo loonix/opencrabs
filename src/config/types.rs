@@ -1667,6 +1667,14 @@ pub struct AgentConfig {
     #[serde(default)]
     pub plan_worker_allow_write: bool,
 
+    /// Play a short notification sound when a plan reaches 100% at turn
+    /// settle (#2255). Default FALSE: an agent that chirps unasked is
+    /// noise, so this is opt-in. Only the WAV at
+    /// `src/assets/sound/water_drip_ui-04.wav` is used, only the TUI plays
+    /// it, and no desktop notification or toast is ever raised.
+    #[serde(default)]
+    pub completion_notification_enabled: bool,
+
     /// Auto-install new releases on startup without prompting (default: true).
     /// When false, the user is shown an update prompt dialog instead.
     #[serde(default = "default_auto_update")]
@@ -2074,6 +2082,7 @@ impl Default for AgentConfig {
             plan_require_approval: default_plan_require_approval(),
             plan_worker_allow_nested: false,
             plan_worker_allow_write: false,
+            completion_notification_enabled: false,
             auto_update: default_auto_update(),
             evolve_allow_root: default_evolve_allow_root(),
             session_notify_enabled: false,

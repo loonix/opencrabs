@@ -257,7 +257,7 @@ winresource = "0.1"
 # h2 advisory (RUSTSEC-2026-0258); the exposure is bounded because that
 # client is used only to download models from Hugging Face. Documented in
 # the README and tracked in #1402.
-default = ["telegram", "whatsapp", "discord", "slack", "trello", "local-stt", "local-tts", "browser", "rtk", "code-graph", "pdfium"]
+default = ["telegram", "whatsapp", "discord", "slack", "trello", "local-stt", "local-tts", "browser", "rtk", "code-graph", "pdfium", "notification-sound"]
 # Profiling feature enables pprof on Unix only (no-op on Windows)
 profiling = []
 # RTK (Rust Token Killer) integration - filters bash command outputs to save 60-90% tokens
@@ -273,6 +273,9 @@ discord = ["serenity"]
 slack = ["slack-morphism", "tokio-tungstenite", "rustls"]
 local-stt = ["rwhisper", "rodio", "hound", "rubato", "symphonia", "symphonia-adapter-libopus"]
 local-tts = ["opusic-sys", "rubato"]
+# Plan-finished chime (#2255). `rodio` is already pulled in by `local-stt`,
+# so this feature only adds the WAV decoder for the one embedded drip.
+notification-sound = ["rodio", "rodio/wav"]
 browser = ["chromey"]
 pdfium = ["dep:pdfium-render"]
 code-graph = ["tree-sitter", "tree-sitter-rust"]
