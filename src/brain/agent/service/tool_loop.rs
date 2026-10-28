@@ -8344,6 +8344,25 @@ impl AgentService {
             {
                 tracing::warn!("Failed to persist auto-completed trailing plan task: {e}");
             }
+            // #2255: a finished plan announces itself. The event carries the
+            // fact to every surface from this one place; whether anything
+            // makes noise about it is the surface's call (the TUI gates the
+            // completion sound on `[agent] completion_notification_enabled`).
+            // Emitted on the MERGED per-turn callback, not `self.progress_callback`:
+            // a channel turn carries its own callback as an override, and
+            // reading the service field alone would drop the event for it.
+            if let Some(resolved) =
+                crate::utils::completion_sound::announcement_pending(Some(&finished))
+                && let Some(cb) = progress_callback.as_ref()
+            {
+                cb(
+                    session_id,
+                    ProgressEvent::PlanCompleted {
+                        title: finished.title.clone(),
+                        tasks: resolved,
+                    },
+                );
+            }
             if finished.is_complete()
                 && let Err(e) = crate::utils::plan_files::archive_plan(session_id).await
             {
