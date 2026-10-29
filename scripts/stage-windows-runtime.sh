@@ -52,15 +52,37 @@ to_shell_path() {
   fi
 }
 
-# Highest version directory wins: a runner image can carry several MSVC
-# redistributable generations side by side after an in-place VS upgrade.
+# True when a generation directory actually carries the x64 CRT.
+has_crt_dir() {
+  local dir="$1" crt
+  [ -d "$dir/x64" ] || return 1
+  for crt in "$dir"/x64/Microsoft.VC*.CRT; do
+    [ -f "$crt/msvcp140.dll" ] && return 0
+  done
+  return 1
+}
+
+# Highest generation wins, but only among directories that hold the CRT. A VS
+# 2026 install carries both real generations (14.51.36231, VC145) and an alias
+# directory named after the toolset (v145) that holds MergeModules and no x64
+# folder at all. `sort -V | tail -1` prefers the alias, because "v" sorts after
+# every digit, and staging then fails with four missing DLLs while looking in a
+# directory that never held them. Numeric-only candidates, newest first, first
+# one with a CRT wins.
 newest_version_dir() {
   local root="$1"
-  local dir
-  dir=$(find "$root" -mindepth 1 -maxdepth 1 -type d -name '*' -print 2>/dev/null |
-    sort -V | tail -1)
-  [ -n "$dir" ] || fail "no version directory under $root"
-  printf '%s' "$dir"
+  local candidates dir
+  candidates=$(find "$root" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -print 2>/dev/null |
+    sort -V -r)
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    if has_crt_dir "$dir"; then
+      printf '%s' "$dir"
+      return 0
+    fi
+  done <<<"$candidates"
+  fail "no generation under $root holds an x64 CRT (saw: $(ls -1 "$root" 2>/dev/null | tr '\n' ' '))"
+  return 1
 }
 
 locate_redist_root() {
@@ -144,6 +166,10 @@ self_test() {
   # Two generations, deliberately out of order, plus a decoy newer-looking
   # friend: sort -V must pick 14.44 over 14.9 and 14.29.
   local old="$tmp/14.29.30153" new="$tmp/14.44.35207"
+  # The two shapes that must never win over a real generation: the toolset
+  # alias (v145) sorts above every digit, and a newer generation can
+  # legitimately ship without the CRT.
+  mkdir -p "$tmp/v145/MergeModules" "$tmp/14.99.00000/MergeModules"
   mkdir -p "$old/x64/Microsoft.VC143.CRT" "$old/x64/Microsoft.VC143.OpenMP"
   mkdir -p "$new/x64/Microsoft.VC143.CRT" "$new/x64/Microsoft.VC143.OpenMP"
   printf 'old' >"$old/x64/Microsoft.VC143.CRT/vcruntime140.dll"
