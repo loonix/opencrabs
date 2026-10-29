@@ -1,0 +1,26 @@
+name: Probe redist layout
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - name: Dump VC redist tree
+        shell: pwsh
+        run: |
+          $vs = "C:\Program Files\Microsoft Visual Studio"
+          Write-Host "=== VS roots ==="
+          Get-ChildItem $vs -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+          Write-Host "=== VC\Redist (depth<=3 dirs) ==="
+          Get-ChildItem "$vs\18\Enterprise\VC\Redist" -Directory -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+          Write-Host "=== msvcp140.dll under VC ==="
+          Get-ChildItem "$vs\18\Enterprise\VC" -Recurse -Filter msvcp140.dll -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+          Write-Host "=== vcomp140.dll under VC ==="
+          Get-ChildItem "$vs\18\Enterprise\VC" -Recurse -Filter vcomp140.dll -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+          Write-Host "=== env vars ==="
+          "VCINSTALLDIR=$env:VCINSTALLDIR"
+          "VCToolsRedistDir=$env:VCToolsRedistDir"
