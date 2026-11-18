@@ -43,11 +43,11 @@ jobs:
         env:
           CFLAGS: -march=armv8-a+crypto
           CXXFLAGS: -march=armv8-a+crypto
-        run: cargo build --locked --release --target aarch64-apple-darwin --all-features
+        run: cargo build --locked --profile ci --target aarch64-apple-darwin --all-features
 
       - name: Package
         run: |
-          cd target/aarch64-apple-darwin/release
+          cd target/aarch64-apple-darwin/ci
           for b in opencrabs opencrabs-gui; do
             test -f "$b" || { echo "::error::$b was not built"; exit 1; }
             strip "$b"
