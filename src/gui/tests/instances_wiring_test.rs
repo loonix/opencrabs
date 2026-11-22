@@ -536,8 +536,17 @@ fn a_remote_send_carries_the_conversation_on_screen() {
     // a context still returns a task id and still looks like it worked while
     // the host opens a brand new session (#3133).
     let source = include_str!("../dashboard_instances.rs");
-    let body =
-        fn_body(source, "pub(crate) fn send_remote").expect("send_remote is the window's send");
+    // The send is two functions on purpose: `send_remote` submits the field and
+    // `send_remote_text` is what the field's own send emits. Pin the split
+    // itself, because a submit that stopped going through the editor would
+    // read a copy of the draft and lose the chords the editor applies to it.
+    let submit = fn_body(source, "pub(crate) fn send_remote").expect("send_remote is the submit");
+    assert!(
+        submit.contains("editor.submit(cx)"),
+        "the button and Enter must submit the chat's editor, not read a copy"
+    );
+    let body = fn_body(source, "pub(crate) fn send_remote_text")
+        .expect("send_remote_text is what the editor's send emits");
     assert!(
         body.contains(".context_id.clone()"),
         "the send must read the context off the transcript it is showing"
@@ -560,8 +569,8 @@ fn a_remote_send_carries_the_conversation_on_screen() {
 #[test]
 fn a_remote_send_follows_the_task_to_its_answer() {
     let source = include_str!("../dashboard_instances.rs");
-    let body =
-        fn_body(source, "pub(crate) fn send_remote").expect("send_remote is the window's send");
+    let body = fn_body(source, "pub(crate) fn send_remote_text")
+        .expect("send_remote_text is what the editor's send emits");
     assert!(
         body.contains("transcript.following = Some(task.id.clone())"),
         "the send claims the follow slot with the id the host handed back"
@@ -637,13 +646,41 @@ fn the_remote_composer_takes_the_local_ones_measurements() {
     // The owner's report was not "make it prettier", it was that the remote
     // field did not look like the one in the chat: 13 px of text in a 32 px
     // box against the local 14 px on a 22 px line with a 44 px floor (#3133).
-    // Both numbers live in two files that nothing forces together, so a change
-    // to the local composer would silently leave the remote one behind. The
-    // guard reads both and compares them.
+    //
+    // The fix is not to copy those four numbers into a second composer, it is
+    // to draw the *same* editor entity, so the numbers cannot drift because
+    // there is only one place they live. This guard pins that shape: the panel
+    // takes the chat's editor and hands it to the painter, and it never
+    // re-decides a measurement the editor already owns. A copy of the numbers
+    // here would pass a "contains" test while quietly becoming a second field,
+    // which is exactly the rewrite the owner called out ("parece quase que tu
+    // re-escreveste em vez de reutilizar o que ja existe").
     let panel = include_str!("../remote_panel.rs");
     let composer = fn_body(panel, "pub(crate) fn view(").expect("the panel has a view");
-    let editor = include_str!("../editor.rs");
+    assert!(
+        composer.contains("editor: gpui::Entity<crate::editor::Editor>"),
+        "the panel must take the chat's own editor, not a draft string"
+    );
+    assert!(
+        composer.contains("editor.into_any_element()"),
+        "and it must hand that entity to the painter; anything else is a \
+         second field wearing the same colours"
+    );
+    for measured in [
+        ".line_height(px(22.))",
+        ".text_size(px(14.))",
+        ".min_h(px(44.))",
+    ] {
+        assert!(
+            !composer.contains(measured),
+            "the panel must not re-decide {measured}: it belongs to the editor, \
+             and a second copy is how the two fields drift apart"
+        );
+    }
 
+    // The editor is where they actually live, and it has to keep them, or the
+    // panel above is drawing a field that lost its measurements.
+    let editor = include_str!("../editor.rs");
     for measurement in [
         ".line_height(px(22.))",
         ".text_size(px(14.))",
@@ -651,22 +688,15 @@ fn the_remote_composer_takes_the_local_ones_measurements() {
         "transcript::card_inset()",
     ] {
         assert!(
-            composer.contains(measurement),
-            "the remote composer must carry {measurement}, which is what the \
-             local field uses; without it the two fields are different sizes"
-        );
-        assert!(
             editor.contains(measurement),
-            "{measurement} is no longer the local composer's, so this guard is \
-             comparing the remote field against nothing: update both together"
+            "{measurement} is what the local composer draws with, and the \
+             remote field inherits it only because it is the same editor"
         );
     }
-
-    // The placeholder is the local field's own constant. A second copy of the
-    // string is how the two drift into saying different things.
     assert!(
-        composer.contains("crate::editor::PLACEHOLDER"),
-        "the remote placeholder must be the local constant, not a literal"
+        editor.contains("placeholder: PLACEHOLDER.into()"),
+        "the editor must seed its own placeholder, which is the constant the \
+         remote field then shows without knowing the string"
     );
 }
 
