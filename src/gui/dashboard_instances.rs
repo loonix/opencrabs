@@ -1593,9 +1593,14 @@ impl Dashboard {
     /// tem sessões" are different things to tell the owner, and the panel draws
     /// them differently.
     pub(crate) fn instance_fetch_remote(&mut self, host_id: String, cx: &mut Context<Self>) {
+        // Read the crab's address and token before anything below needs `self`
+        // mutably: `entry` borrows `self.instances`, and the field resets that
+        // follow take `self` as a whole.
         let Some(entry) = self.instances.get(&host_id) else {
             return;
         };
+        let url = entry.url().to_string();
+        let token = entry.known.token.clone();
         // Every way into a crab lands here: the badge, the pairing form, and
         // the Ctrl+Alt+Up/Down switch. The draft is per crab, so it is dropped
         // at the one door they all use.
@@ -1609,8 +1614,6 @@ impl Dashboard {
         self.remote_editor.update(cx, |editor, _| {
             editor.focus_pending = true;
         });
-        let url = entry.url().to_string();
-        let token = entry.known.token.clone();
         self.instance_remote = Some(RemoteView::loading(host_id.clone()));
 
         cx.spawn(async move |this, cx| {
