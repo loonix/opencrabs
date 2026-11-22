@@ -991,3 +991,47 @@ fn a_new_conversation_follows_the_crab_on_screen() {
         "/new has to follow the crab too"
     );
 }
+
+/// The banner's session title stays on one line. A flex child with only
+/// `min_w_0` is squeezed to zero width by its `flex_none` siblings, and a zero
+/// width box wraps after every glyph: the owner saw "Setup Complete Need User
+/// Details" one letter per line down the whole panel (#3133).
+#[test]
+fn the_remote_banner_title_does_not_wrap_per_letter() {
+    let panel = include_str!("../remote_panel.rs");
+    let title = panel
+        .split("when_some(frame.session_title.clone()")
+        .nth(1)
+        .and_then(|rest| rest.split(".when(").next())
+        .expect("the banner paints the session title");
+    assert!(
+        title.contains(".truncate()"),
+        "a shrinkable title must truncate, or it wraps per glyph"
+    );
+}
+
+/// A key typed while the remote field is on screen but not yet focused lands
+/// in the field at once. Flagging `focus_pending` with no repaint swallowed
+/// every key until something else redrew the editor, which read as typing
+/// that showed up seconds late (#3133).
+#[test]
+fn a_key_before_focus_reaches_the_remote_field() {
+    let keys = include_str!("../dashboard_keys.rs");
+    let branch = keys
+        .split("if self.screen == Screen::Chat && self.instance_remote_open() {")
+        .nth(1)
+        .and_then(|rest| rest.split("// Ctrl+C is the terminal's own ladder").next())
+        .expect("the remote keyboard branch");
+    assert!(
+        branch.contains("window.focus(&handle)"),
+        "focus is taken in the same frame"
+    );
+    assert!(
+        branch.contains("replace_text_in_range(None, &text"),
+        "the key that triggered the focus is typed, not dropped"
+    );
+    assert!(
+        !branch.contains("focus_pending = true"),
+        "a deferred focus with no repaint is the bug"
+    );
+}

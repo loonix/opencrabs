@@ -260,8 +260,13 @@ pub(crate) fn view(
         )
         .when_some(frame.session_title.clone(), |d, title| {
             d.child(
+                // `truncate` keeps the title on one line. `min_w_0` alone let
+                // the flex row squeeze it to zero width, and a zero-width box
+                // wraps after every glyph: the title came out one letter per
+                // line down the whole panel (#3133).
                 div()
                     .min_w_0()
+                    .truncate()
                     .text_size(rems(0.6875))
                     .text_color(rgb(p.text_muted))
                     .child(SharedString::from(format!("· {title}"))),

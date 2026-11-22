@@ -947,12 +947,24 @@ impl Dashboard {
                 // as they would with the local composer focused.
                 return;
             }
-            // On screen but not focused yet (the frame before the field takes
-            // the keyboard): the keys are still the remote's, so they are not
-            // dropped into the rail behind it.
-            self.remote_editor.update(cx, |editor, _| {
-                editor.focus_pending = true;
-            });
+            // On screen but not focused yet: take the keyboard now and hand
+            // this key to the field. Setting `focus_pending` without a notify
+            // left the focus waiting for whatever repainted the editor next,
+            // and every key typed until then was swallowed, which read as
+            // letters showing up seconds after they were typed (#3133).
+            let handle = self.remote_editor.read(cx).focus_handle.clone();
+            window.focus(&handle);
+            if let Some(text) = ev.keystroke.key_char.clone()
+                && !ev.keystroke.modifiers.control
+                && !ev.keystroke.modifiers.alt
+                && !ev.keystroke.modifiers.platform
+                && text.chars().all(|c| !c.is_control())
+            {
+                self.remote_editor.update(cx, |editor, cx| {
+                    editor.replace_text_in_range(None, &text, window, cx);
+                });
+            }
+            cx.notify();
             return;
         }
         // Ctrl+C is the terminal's own ladder (#2308): scrolled up it gives
