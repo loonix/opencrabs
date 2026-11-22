@@ -92,17 +92,36 @@ pub(super) fn render_tasks_overlay(f: &mut Frame, app: &App, area: Rect) {
             Some(path) => {
                 let tail = output_tail(&path, rows);
                 if tail.trim().is_empty() {
+                    // An empty log is a state, not a shrug: the reader opened
+                    // this overlay to see what the task is doing, and one bare
+                    // "(no output yet)" answers nothing. The row above already
+                    // names the tag and the elapsed time, so this says what the
+                    // silence means and that it is ordinary.
                     lines.push(Line::from(Span::styled("(no output yet)", dim)));
+                    lines.push(Line::from(Span::styled(
+                        "the command has written nothing to its log so far.",
+                        dim,
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        "a command that buffers its output prints it all at the end.",
+                        dim,
+                    )));
                 } else {
                     for line in tail.lines() {
                         lines.push(Line::from(line.to_string()));
                     }
                 }
             }
-            None => lines.push(Line::from(Span::styled(
-                "(this task has no output file to read)",
-                dim,
-            ))),
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "(this task has no output file to read)",
+                    dim,
+                )));
+                lines.push(Line::from(Span::styled(
+                    "a task mirrored from elsewhere keeps its output where it runs.",
+                    dim,
+                )));
+            }
         }
     }
 
@@ -404,11 +423,21 @@ fn render_task_detail(f: &mut Frame, d: &TaskDetail, area: Rect) {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if d.text.trim().is_empty() {
+        // Same rule as the roster above: the silence is a state, and the view
+        // the reader opened to find out what is happening says so.
         lines.push(Line::from(Span::styled(
             if d.path.is_none() {
                 "(this task has no output file to read)"
             } else {
                 "(no output yet)"
+            },
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            if d.path.is_none() {
+                "a task mirrored from elsewhere keeps its output where it runs."
+            } else {
+                "the command has written nothing yet; some buffer and print at the end."
             },
             dim,
         )));

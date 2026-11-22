@@ -119,15 +119,44 @@ pub(crate) fn header_text(count: usize) -> String {
     }
 }
 
-/// What the output block says for an open task: its tail, or a line that
-/// explains the silence. A task with no file to read and one that has not
-/// written yet look the same on disk, and both are ordinary.
-pub(crate) fn tail_or_note(tail: Option<&str>) -> String {
+/// What the output block says for an open task: its tail, or the state that
+/// explains the silence.
+///
+/// A task that had not written yet printed one bare line, `no output yet`, and
+/// the owner read exactly that under a command that had been running for three
+/// minutes: "tasks detached que nao aparece nenhuma informacao mas idealmente
+/// deveria sempre aparecer informacao, porque se o user abre entao ele quer ver
+/// o que se passa". He is right. Opening a task is a question ("what is it
+/// doing?"), and an empty box with a shrug answers none of it.
+///
+/// So the silence is printed as the state it is: how long it has been running,
+/// how it was started, and the fact that a command may hold its whole output
+/// and write it at the end. A log that is empty because the command buffers is
+/// not a task that is stuck, and the card now says so instead of leaving the
+/// reader to guess between the two.
+pub(crate) fn tail_or_note(tail: Option<&str>, tag: &str, secs: u64) -> String {
     match tail {
         Some(text) if !text.trim().is_empty() => text.to_string(),
-        Some(_) => "no output yet".to_string(),
-        None => "no output available for this task".to_string(),
+        Some(_) => silent_note(tag, secs),
+        None => format!(
+            "no output available for this task\n\
+             {tag}, running {}\n\
+             the file this task writes to was not found, so there is nothing to read",
+            elapsed_text(secs)
+        ),
     }
+}
+
+/// The state block for a task whose log exists and is still empty.
+pub(crate) fn silent_note(tag: &str, secs: u64) -> String {
+    format!(
+        "no output yet\n\
+         {tag}, running {}\n\
+         the command has written nothing to its log so far. a command that \
+         buffers its output prints it all at the end, so a silent log is not a \
+         stuck task",
+        elapsed_text(secs)
+    )
 }
 
 /// The card's click handlers, minted by the window, which is the only one
@@ -269,7 +298,13 @@ pub(crate) fn task_card(
                 .font_family(fonts::current_mono())
                 .text_xs()
                 .text_color(rgb(pal.text_muted));
-            for line in tail_or_note(tail).lines() {
+            let note = tail_or_note(tail, row.tag, row.secs);
+            // A log line is one line, cut at the card's edge the way a terminal
+            // cuts it. The note that explains a silent log is a sentence, and
+            // truncating it is how the explanation itself becomes unreadable, so
+            // it wraps while a real tail does not.
+            let silent = tail.is_none_or(|t| t.trim().is_empty());
+            for line in note.lines() {
                 // An empty child collapses to no height, which would swallow
                 // the blank lines a build prints between its sections.
                 let shown = if line.is_empty() { " " } else { line };
@@ -277,16 +312,17 @@ pub(crate) fn task_card(
                 // block div holding the truncating text: gpui measures that
                 // shape at a zero basis and lays the line out one character
                 // wide (#2624, the same trap the plan strip fell into).
-                block = block.child(
-                    div().flex().flex_row().w_full().min_w_0().child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .truncate()
-                            .child(SharedString::from(shown.to_string())),
-                    ),
-                );
+                let text = div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(SharedString::from(shown.to_string()));
+                let text = if silent {
+                    text.whitespace_normal()
+                } else {
+                    text.truncate()
+                };
+                block = block.child(div().flex().flex_row().w_full().min_w_0().child(text));
             }
             col = col.child(block);
         }
@@ -365,8 +401,20 @@ mod tests {
 
     #[test]
     fn a_silent_task_says_why_it_is_silent() {
-        assert_eq!(tail_or_note(Some("Compiling x")), "Compiling x");
-        assert_eq!(tail_or_note(Some("  \n")), "no output yet");
-        assert_eq!(tail_or_note(None), "no output available for this task");
+        // The owner's report: a detached task that had written nothing showed a
+        // bare line and no information at all, under a command that had been
+        // running for minutes. Opening a task is asking what it is doing, so the
+        // silence is printed as the state it is.
+        assert_eq!(
+            tail_or_note(Some("Compiling x"), "detached", 5),
+            "Compiling x"
+        );
+        let silent = tail_or_note(Some("  \n"), "detached", 174);
+        assert!(silent.starts_with("no output yet"), "{silent}");
+        assert!(silent.contains("detached, running 2m 54s"), "{silent}");
+        assert!(silent.contains("buffers its output"), "{silent}");
+        let missing = tail_or_note(None, "subagent", 8);
+        assert!(missing.contains("subagent, running 8s"), "{missing}");
+        assert!(missing.contains("was not found"), "{missing}");
     }
 }

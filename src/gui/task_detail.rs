@@ -230,6 +230,26 @@ pub(crate) fn subtitle_text(tag: &str, secs: u64, ended: bool, path: Option<&str
     }
 }
 
+/// What the view prints for a task whose log is still empty.
+///
+/// The owner's report: "tasks detached que nao aparece nenhuma informacao mas
+/// idealmente deveria sempre aparecer informacao, porque se o user abre entao
+/// ele quer ver o que se passa". A task that has written nothing yet is
+/// ordinary (a command may buffer its whole output and flush it at the end),
+/// but the view has to say that instead of printing an empty box: it names the
+/// state the header already carries, and the reason a log can be silent while
+/// the command is working.
+pub(crate) fn silent_state(tag: &str, secs: u64, ended: bool, path: Option<&str>) -> String {
+    let state = subtitle_text(tag, secs, ended, path);
+    let reason = if path.is_some() {
+        "the command has written nothing to its log so far. a command that buffers \
+         its output prints it all at the end, so a silent log is not a stuck task"
+    } else {
+        "the file this task writes to was not found, so there is nothing to read"
+    };
+    format!("no output yet\n\n{state}\n{reason}")
+}
+
 /// The notice under the output while the reader is scrolled away.
 pub(crate) fn unseen_text(unseen: usize) -> String {
     match unseen {
@@ -273,12 +293,15 @@ pub(crate) fn detail_modal(
     let width = (viewport.0 - 64.0).clamp(320.0, 900.0);
     let out_height = (viewport.1 - 280.0).clamp(140.0, 560.0);
 
+    // An empty log is a state, not a shrug: the reader opened this view to find
+    // out what the task is doing, and one bare "no output yet" answers nothing.
     let shown: SharedString = if detail.text.trim().is_empty() {
-        SharedString::from(if detail.path.is_none() {
-            "no output available for this task"
-        } else {
-            "no output yet"
-        })
+        SharedString::from(silent_state(
+            detail.tag,
+            detail.secs(),
+            ended,
+            path.as_deref(),
+        ))
     } else {
         detail.text.clone()
     };
@@ -504,6 +527,22 @@ mod tests {
         let mut d = detail(true);
         d.ended = Some(3);
         assert!(!d.stoppable());
+    }
+
+    #[test]
+    fn an_empty_log_names_the_state_instead_of_a_bare_line() {
+        // "se o user abre entao ele quer ver o que se passa": the modal is
+        // opened to find out what a task is doing, so a silent log prints the
+        // task's own state and the reason it can be silent, not one bare line.
+        let quiet = silent_state("detached", 174, false, Some("/tmp/opencrabs-bg-x.log"));
+        assert!(quiet.starts_with("no output yet"), "{quiet}");
+        assert!(quiet.contains("detached \u{b7} running 2m 54s"), "{quiet}");
+        assert!(quiet.contains("/tmp/opencrabs-bg-x.log"), "{quiet}");
+        assert!(quiet.contains("not a stuck task"), "{quiet}");
+
+        let ended = silent_state("detached", 9, true, None);
+        assert!(ended.contains("detached \u{b7} ended after 9s"), "{ended}");
+        assert!(ended.contains("was not found"), "{ended}");
     }
 
     #[test]
