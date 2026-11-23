@@ -111,3 +111,6 @@ pub const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
 #[cfg(test)]
 mod tests;
+
+// F1 proof: planted type error, never delivered.
+pub const F1_PROVA: u32 = "not a number";
