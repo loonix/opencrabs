@@ -3747,11 +3747,12 @@ impl Dashboard {
         // only when the context rung is live: this runs on every frame, and
         // the other rungs never print the number.
         // Asked of the crab (`ContextBase`) synchronously, the way the task
-        // roster is: a crab still booting answers `NotReady`, which reads 0.
+        // roster is: a crab still booting answers `NotReady`, which reads 0,
+        // and so does a remote crab, because a frame never waits on the
+        // network (`tasks_ctx`).
         if state.context_percent() >= CONTEXT_TIGHT {
-            let crate::backend_glue::Backend::Local(ctx) = &self.backend;
-            state.clear_base = opencrabs::backend::facts::ContextBase {}
-                .answer(ctx)
+            state.clear_base = crate::dashboard_turns::tasks_ctx(&self.backend)
+                .and_then(|ctx| opencrabs::backend::facts::ContextBase {}.answer(ctx).ok())
                 .map(u64::from)
                 .unwrap_or(0);
         }
