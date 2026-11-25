@@ -6,6 +6,7 @@
 //! library, which cannot see the window at all.
 
 mod backend_remote_test;
+mod blob_cache_test;
 mod composer_orb_test;
 mod dashboard_turns_test;
 mod instances_test;
