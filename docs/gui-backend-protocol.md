@@ -173,6 +173,7 @@ output.
 | `session_ops.clear_messages` | `ClearMessages` | `a2a:manage` | delete one session's messages, keep the session; params `{"session_id"}`, reply `null` |
 | `turn.approval_answer` | `ApprovalAnswer` | `a2a:manage` | answer one `approval_requested`; params `{"session_id", "request_id", "approved", "always"}`, reply `true` if a waiting tool took it |
 | `turn.cancel` | `TurnCancel` | `a2a:send` | stop the remote turn on a session; params `{"session_id"}`, reply `true` if one was running |
+| `shell.run` | `ShellRun` | `a2a:admin` | the window's `!cmd`, run through the platform shell in the crab's launch directory; params `{"cmd"}`, reply the chat's text: the command line, then its output, each stream capped |
 
 ### Fixture shape
 
