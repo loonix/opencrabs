@@ -25,5 +25,6 @@ mod pool_door_test;
 mod prompt_files_test;
 mod sidebar_action_test;
 mod usage_load_test;
+mod voice_crab_test;
 mod voice_note_row_test;
 mod window_test;
