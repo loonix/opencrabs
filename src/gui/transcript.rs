@@ -3238,6 +3238,12 @@ fn history_attachments(
         .pt_1();
     for (index, path) in audio.into_iter().enumerate() {
         let key = path.to_string_lossy();
+        // The marker names the crab's path. The player opens the window's
+        // copy of it: the same path for this process's crab, the blob cache's
+        // copy for a crab on another machine, never the crab's path on this
+        // disk.
+        let here = crate::voice_input::here(path);
+        let path = here.as_path();
         // The same glass block the composer shows for a take, so a sent clip
         // and the take that produced it are one element with one behaviour.
         // The transcript builds its rows from plain functions with no `App` in

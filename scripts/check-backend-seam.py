@@ -144,7 +144,6 @@ LOCAL_ONLY: dict[tuple[str, str], str] = {
     ("src/gui/logging.rs", "init"): "this window's log file",
     # janela: P3, P4
     ("src/gui/bang.rs", "open_in_terminal"): "local-only capability (Cap::OpenTerminal)",
-    ("src/gui/voice_input.rs", "write_clip"): "records locally; the clip goes up as a turn attachment",
     ("src/gui/voice_media.rs", "decode"): "decodes the already localized blob",
     # boot: F4, builds the local crab before a backend exists
     ("src/gui/agent_bridge.rs", "build"): "builds the local Ctx from the window's service",
