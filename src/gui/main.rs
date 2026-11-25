@@ -30,6 +30,7 @@ mod agent_bridge;
 mod app;
 mod attachment_view;
 mod backend_glue;
+mod backend_remote;
 mod bang;
 mod boot;
 mod breakdown;
