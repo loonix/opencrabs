@@ -31,6 +31,7 @@ mod prompt_files_test;
 mod remote_watch_wiring_test;
 mod session_restore_test;
 mod share_address_test;
+mod share_tunnel_test;
 mod sidebar_action_test;
 mod topic_icon_files_test;
 mod transcript_tile_files_test;
