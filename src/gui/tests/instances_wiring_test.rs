@@ -330,7 +330,7 @@ fn the_share_address_says_when_it_cannot_be_reached() {
 }
 
 #[test]
-fn the_strip_is_drawn_only_behind_the_remote_crabs_flag() {
+fn the_strip_is_drawn_only_behind_the_instance_rail_flag() {
     // Off by default: a single-crab install must not spend a column on it.
     // The only way out of the function without a strip is the flag check.
     // The one gate: the list's frame. The strip's mount and the rail's
@@ -338,32 +338,37 @@ fn the_strip_is_drawn_only_behind_the_remote_crabs_flag() {
     let frame = fn_body(WIRING, "crab_list_frame");
     assert_eq!(frame.matches("return None").count(), 1, "{frame}");
     assert!(
-        frame.contains("if !self.remote_crabs {\n            return None;"),
+        frame.contains("if !self.instance_rail {\n            return None;"),
         "{frame}"
     );
     let element = fn_body(WIRING, "instance_strip_element");
     assert!(element.contains("self.crab_list_frame()?"), "{element}");
     assert!(RAIL.contains("crabs: self.crab_list_frame().map("));
-    assert!(APP.contains("remote_crabs: Config::current().gui.remote_crabs,"));
+    assert!(APP.contains("let instance_rail = Config::current().gui.instance_rail;"));
     // While off no paired crab is probed: the loop's target list is empty.
     let probe = fn_body(WIRING, "spawn_instance_probe");
     assert!(
-        probe.contains("if !this.remote_crabs {\n                        return Vec::new();"),
+        probe.contains("if !this.instance_rail {\n                        return Vec::new();"),
         "{probe}"
     );
     // Switching off while a remote crab is held goes home first, so a
     // hidden strip never leaves the window talking to a crab it cannot see.
-    let set = fn_body(WIRING, "set_remote_crabs");
+    let set = fn_body(WIRING, "set_instance_rail");
     assert!(set.contains("self.instance_clear(cx);"), "{set}");
-    // The switch is this window's: it writes this machine's file, and a
-    // reload of that file folds into the window whichever crab is held.
-    let toggle = fn_body(WIRING, "toggle_remote_crabs");
+    // Switched on in a window that opened with it off, the store is read and
+    // the probe loop started once, the work the window skipped at open.
     assert!(
-        toggle.contains("Config::write_key(\"gui\", \"remote_crabs\""),
-        "{toggle}"
+        set.contains("if on && !self.instance_probe_running {"),
+        "{set}"
     );
-    assert!(CONFIG_RELOAD.contains("self.set_remote_crabs(config.gui.remote_crabs, cx);"));
-    assert!(SETTINGS.contains("body.push(self.remote_crabs_row(cx));"));
+    assert!(set.contains("self.load_instances(cx);"), "{set}");
+    assert!(set.contains("Self::spawn_instance_probe(cx);"), "{set}");
+    // The switch is this window's: a reload of this machine's file folds
+    // into the window whichever crab is held. The settings row is the
+    // `[gui] instance_rail` spec, the one switch for the feature.
+    assert!(CONFIG_RELOAD.contains("self.set_instance_rail(config.gui.instance_rail, cx);"));
+    assert!(include_str!("../settings_view.rs").contains("key: \"instance_rail\","));
+    assert!(!SETTINGS.contains("remote_crabs"));
     // Once on, the row that pairs the first crab is always in the list.
     let list = fn_body(RAIL_VIEW, "crabs_list");
     assert!(list.contains("\"rail-crab-pair\""), "{list}");
@@ -642,9 +647,9 @@ fn a_badge_draws_the_mark_and_a_card_names_the_crab() {
 
 #[test]
 fn with_the_flag_off_the_rail_mounts_nothing_new() {
-    // The regression the issue names: a window with `[gui] remote_crabs =
+    // The regression the issue names: a window with `[gui] instance_rail =
     // false` draws main's sidebar. The rail frame's `crabs` is `None` (the
-    // gate is pinned in `the_strip_is_drawn_only_behind_the_remote_crabs_flag`),
+    // gate is pinned in `the_strip_is_drawn_only_behind_the_instance_rail_flag`),
     // and `None` builds no toggle and no list, so the brand row falls back to
     // the bare logo, the one main draws.
     let render = fn_body(RAIL_VIEW, "render");
@@ -658,10 +663,10 @@ fn with_the_flag_off_the_rail_mounts_nothing_new() {
     // The arrow is drawn only inside the toggle, so no flag, no arrow.
     assert_eq!(RAIL_VIEW.matches("\\u{25b8}").count(), 1);
     // The flag off also folds the list, so turning it back on starts closed.
-    let set = fn_body(WIRING, "set_remote_crabs");
+    let set = fn_body(WIRING, "set_instance_rail");
     assert!(set.contains("self.crabs_open = false;"), "{set}");
     let toggle = fn_body(WIRING, "toggle_crab_list");
-    assert!(toggle.contains("if !self.remote_crabs {"), "{toggle}");
+    assert!(toggle.contains("if !self.instance_rail {"), "{toggle}");
     // And the old column is gone from the layout: the strip mounts with no
     // box of its own, only for its cards.
     assert!(!STRIP.contains("STRIP_REM"));
@@ -715,8 +720,8 @@ fn the_step_chord_walks_the_crabs_only_behind_the_flag() {
         .expect("the chord reaches instance_step");
     let gate = keys.get(at.saturating_sub(600)..at).unwrap_or("");
     assert!(
-        gate.contains("self.remote_crabs"),
-        "with [gui] remote_crabs off the chord must not be taken"
+        gate.contains("self.instance_rail"),
+        "with [gui] instance_rail off the chord must not be taken"
     );
     let dash = include_str!("../dashboard_instances.rs");
     let step = fn_body(dash, "instance_step");

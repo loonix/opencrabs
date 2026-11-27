@@ -717,10 +717,10 @@ pub(crate) fn run() {
                         rail_view,
                         instances: instances::Instances::default(),
                         instance_rail,
+                        instance_probe_running: instance_rail,
                         instance_strip,
                         instance_card,
                         crabs_open: false,
-                        remote_crabs: Config::current().gui.remote_crabs,
                         instance_error: None,
                         instance_epoch: 0,
                         composer: chat_leaf::Composer::new(editor),
@@ -829,7 +829,7 @@ pub(crate) fn run() {
                 // thread, the probe loop that keeps their dots honest, and the
                 // handshake with the crab the window starts on. A missing
                 // store is an empty strip: a fresh install has no remotes and
-                // must not open with a warning. The crab list is opt-in
+                // must not open with a warning. The rail is opt-in
                 // (#3178): with the gate off neither the store read nor the
                 // probe loop runs, so a user without the feature never pays
                 // for it. The handshake is not part of the feature: it reads

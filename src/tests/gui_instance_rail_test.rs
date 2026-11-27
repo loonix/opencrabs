@@ -39,12 +39,16 @@ fn the_strip_mount_and_its_start_up_work_are_behind_the_gate() {
         .split("Opt-in though (#3178)")
         .nth(1)
         .expect("the mount site names the opt-in rule");
+    // The element is an `Option` here (the list's frame refuses on the same
+    // gate), so the mount is a let-chain on the flag rather than a bare block.
     assert!(
-        mount.contains("if self.instance_rail {"),
+        mount.contains(
+            "if self.instance_rail\n            && let Some(strip) = self.instance_strip_element(cx)\n        {"
+        ),
         "the strip mounts behind the gate"
     );
     assert!(
-        mount.contains("root = root.child(self.instance_strip_element(cx));"),
+        mount.contains("root = root.child(strip);"),
         "the strip element is the gated child"
     );
     let startup = GUI_MOUNT

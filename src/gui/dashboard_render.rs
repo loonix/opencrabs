@@ -2916,9 +2916,12 @@ impl Render for Dashboard {
         // The instance strip has no column (#3178): the crabs are listed in
         // the rail under its logo. Its entity is mounted, with no box of its
         // own, only so the card that is up (pair, share, a crab's own card)
-        // paints over the window, on every screen, and only with
-        // `[gui] remote_crabs` on.
-        if let Some(strip) = self.instance_strip_element(cx) {
+        // paints over the window, on every screen. Opt-in though (#3178):
+        // with `[gui] instance_rail` off nothing is mounted, and the list's
+        // frame refuses on the same gate.
+        if self.instance_rail
+            && let Some(strip) = self.instance_strip_element(cx)
+        {
             root = root.child(strip);
         }
         if self.rail_open {

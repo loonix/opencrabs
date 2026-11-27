@@ -2626,17 +2626,13 @@ pub struct GuiConfig {
     #[serde(default)]
     pub mono_font: Option<String>,
 
-    /// Whether the window draws the strip of other crabs it can talk to, and
-    /// probes them. Off by default: a machine with one crab must not spend a
-    /// column, or a network probe, on a feature it never asked for. The
-    /// settings modal flips it, and so does editing `[gui] remote_crabs`.
-    #[serde(default)]
-    pub remote_crabs: bool,
-    /// The remote-instance rail (#3178): the 56 px column with the crabs this
-    /// window can look at. Off by default, so a user who never asked for
-    /// remote-instance management does not lose the width; opt in here or in
-    /// the settings modal. The change needs a restart: the rail's mount and
-    /// its probe loop are both decided once, when the window opens.
+    /// The remote-instance rail (#3178): the crabs this window can look at,
+    /// listed under the sidebar's logo, and the probe loop that keeps their
+    /// dots honest. Off by default, so a user who never asked for
+    /// remote-instance management pays for none of it; opt in here or in the
+    /// settings modal. A reload of this machine's file folds the value into
+    /// an open window: off goes home to this machine's crab at once, on
+    /// reads the store and starts the probe loop the first time.
     #[serde(default)]
     pub instance_rail: bool,
 }

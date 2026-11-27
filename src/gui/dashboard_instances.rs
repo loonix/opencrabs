@@ -256,10 +256,10 @@ impl Dashboard {
     }
 
     /// The crabs as the rail's list reads them (#3178), or `None` with
-    /// `[gui] remote_crabs` off: then the rail mounts nothing new, not even
+    /// `[gui] instance_rail` off: then the rail mounts nothing new, not even
     /// the arrow beside its logo.
     pub(crate) fn crab_list_frame(&self) -> Option<StripFrame> {
-        if !self.remote_crabs {
+        if !self.instance_rail {
             return None;
         }
         Some(StripFrame::from_model(
@@ -271,7 +271,7 @@ impl Dashboard {
 
     /// The rail's logo was clicked: fold or unfold the list of crabs.
     pub(crate) fn toggle_crab_list(&mut self, cx: &mut Context<Self>) {
-        if !self.remote_crabs {
+        if !self.instance_rail {
             return;
         }
         self.crabs_open = !self.crabs_open;
@@ -294,7 +294,7 @@ impl Dashboard {
 
     /// The strip entity, mounted for its cards only: it has no box of its
     /// own and paints the card that is up over the window. Mounted only with
-    /// `[gui] remote_crabs` on, the only way a card can be opened.
+    /// `[gui] instance_rail` on, the only way a card can be opened.
     pub(crate) fn instance_strip_element(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let frame = self.crab_list_frame()?;
         let view = self.instance_strip.clone();
@@ -351,14 +351,16 @@ impl Dashboard {
         cx.notify();
     }
 
-    /// Fold a new value of `[gui] remote_crabs` into the window.
+    /// Fold a new value of `[gui] instance_rail` into the window.
     ///
     /// Switching it off while a remote crab is held goes home first, through
     /// the same swap a click on the mark makes: a hidden strip must not leave
     /// the window talking to a crab the reader can no longer see or leave.
     /// An open `+` card is closed too, so no invisible card keeps the keys.
-    pub(crate) fn set_remote_crabs(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.remote_crabs == on {
+    /// Switching it on in a window that opened with it off reads the store
+    /// and starts the probe loop once, the work the window skipped at open.
+    pub(crate) fn set_instance_rail(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.instance_rail == on {
             return;
         }
         if !on {
@@ -367,26 +369,20 @@ impl Dashboard {
                 .update(cx, |strip, cx| strip.close_card(cx));
             self.crabs_open = false;
         }
-        self.remote_crabs = on;
+        self.instance_rail = on;
+        if on && !self.instance_probe_running {
+            self.instance_probe_running = true;
+            self.load_instances(cx);
+            Self::spawn_instance_probe(cx);
+        }
         logging::info(&format!(
-            "instances: remote crabs strip switched {}",
+            "instances: instance rail switched {}",
             match on {
                 true => "on",
                 false => "off",
             }
         ));
         cx.notify();
-    }
-
-    /// Flip `[gui] remote_crabs` from the settings modal: written to this
-    /// machine's config, never through the held crab, because it is a window
-    /// preference. A failed write leaves the window as it was and says so.
-    pub(crate) fn toggle_remote_crabs(&mut self, cx: &mut Context<Self>) -> Result<bool, String> {
-        let next = !self.remote_crabs;
-        opencrabs::config::Config::write_key("gui", "remote_crabs", &next.to_string())
-            .map_err(|e| format!("could not save gui.remote_crabs: {e}"))?;
-        self.set_remote_crabs(next, cx);
-        Ok(next)
     }
 
     /// A paired crab was followed to a new address, by the probe loop or by
@@ -423,8 +419,9 @@ impl Dashboard {
             .update(cx, |strip, cx| strip.card_key(ks, cx));
     }
 
-    /// Start the probe loop. Called once from the window's constructor; the
-    /// loop exits when the window dies, like every other loop there.
+    /// Start the probe loop. Called once, from the window's constructor with
+    /// the rail on or from `set_instance_rail` when it is switched on later;
+    /// the loop exits when the window dies, like every other loop there.
     pub(crate) fn spawn_instance_probe(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             // When each crab's stored routes were last swept, so a crab that
@@ -438,7 +435,7 @@ impl Dashboard {
                 // With the strip switched off no paired crab is probed: a
                 // hidden feature must not keep talking to the network.
                 let targets = match this.update(cx, |this, _cx| {
-                    if !this.remote_crabs {
+                    if !this.instance_rail {
                         return Vec::new();
                     }
                     this.instances

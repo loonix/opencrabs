@@ -230,7 +230,7 @@ pub const SPECS: &[SettingSpec] = &[
         label: "Remote instance rail",
         kind: SettingKind::Toggle,
         restart: true,
-        blurb: "the left column of remote crabs; off until you ask for it (#3178)",
+        blurb: "the crabs listed under the sidebar logo; off until you ask for it (#3178)",
         group: SettingsSection::Advanced,
     },
     SettingSpec {
